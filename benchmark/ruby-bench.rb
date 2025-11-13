@@ -50,6 +50,14 @@ class YJITBench
       results = {}
     end
 
+    # Also handle memory results
+    memory_results_file = results_file.sub('.yml', '_memory.yml')
+    if File.exist?(memory_results_file)
+      memory_results = YAML.load_file(memory_results_file)
+    else
+      memory_results = {}
+    end
+
     target_dates = RUBIES.keys.sort.reverse
     target_date = target_dates.find do |date|
       !results.key?(date)
@@ -65,6 +73,7 @@ class YJITBench
 
     container = setup_container(target_date, benchmark: benchmark)
     result = is_ractor ? {} : []
+    memory_result = []
     timeout = 10 * 60
 
     [nil, '--yjit', '--zjit'].each do |opts|
@@ -72,7 +81,7 @@ class YJITBench
       category_arg = category ? "--category #{category}" : ""
       cmd = [
         'docker', 'exec', container, 'bash', '-c',
-        "cd /rubybench/benchmark/ruby-bench && #{env} timeout --signal=KILL #{timeout} ./run_benchmarks.rb #{benchmark} #{category_arg} -e 'ruby #{opts}'",
+        "cd /rubybench/benchmark/ruby-bench && #{env} timeout --signal=KILL #{timeout} ./run_benchmarks.rb #{benchmark} #{category_arg} --rss -e 'ruby #{opts}'",
       ]
       out = IO.popen(cmd, &:read)
       puts out
@@ -91,17 +100,35 @@ class YJITBench
           else
             puts "benchmark output for #{benchmark} not found"
           end
+
+          # Parse memory data
+          if rss = parse_memory_output(out)
+            memory_result << rss
+          else
+            memory_result << nil
+          end
         else
           result << nil
+          memory_result << nil
         end
       end
     end
     results[target_date] = result
+    memory_results[target_date] = memory_result unless is_ractor  # Only store memory for non-ractor benchmarks
 
     FileUtils.mkdir_p(File.dirname(results_file))
     File.open(results_file, "w") do |io|
       results.sort_by(&:first).each do |date, values|
         io.puts "#{date}: #{values.to_json}"
+      end
+    end
+
+    # Write memory results
+    unless is_ractor
+      File.open(memory_results_file, "w") do |io|
+        memory_results.sort_by(&:first).each do |date, values|
+          io.puts "#{date}: #{values.to_json}"
+        end
       end
     end
 
@@ -147,6 +174,25 @@ class YJITBench
 
     return nil if grouped.empty?
     grouped
+  end
+
+  def parse_memory_output(output)
+    # Look for RSS output in the format: RSS: 123.4MiB
+    # or MAXRSS: 456.7MiB (prefer MAXRSS if available)
+    maxrss_line = output.lines.find { |line| line.include?("MAXRSS:") }
+    rss_line = output.lines.find { |line| line.include?("RSS:") }
+
+    # Prefer MAXRSS over RSS
+    target_line = maxrss_line || rss_line
+    return nil unless target_line
+
+    # Extract the value in MiB and convert to bytes
+    if match = target_line.match(/(?:MAX)?RSS:\s*(\d+(?:\.\d+)?)\s*MiB/)
+      mib_value = match[1].to_f
+      return (mib_value * 1024 * 1024).to_i  # Convert MiB to bytes
+    end
+
+    nil
   end
 
   def setup_container(target_date, benchmark:)

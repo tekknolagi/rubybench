@@ -25,10 +25,26 @@ benchmark_results = benchmarks.map do |benchmark, _|
   [benchmark, YAML.load_file(File.expand_path("../results/ruby-bench/#{benchmark}.yml", __dir__))]
 end.to_h
 
+# Load memory results
+memory_results = benchmarks.map do |benchmark, _|
+  memory_file = File.expand_path("../results/ruby-bench/#{benchmark}_memory.yml", __dir__)
+  if File.exist?(memory_file)
+    [benchmark, YAML.load_file(memory_file)]
+  else
+    [benchmark, {}]
+  end
+end.to_h
+
 ruby = rubies.select { |ruby| benchmark_results.first.last.key?(ruby) }.max
 dashboard = {
   date: to_date(ruby),
   headline: {
+    no_jit: [],
+    yjit: [],
+    zjit: [],
+    benchmarks: [],
+  },
+  headline_memory: {
     no_jit: [],
     yjit: [],
     zjit: [],
@@ -40,7 +56,19 @@ dashboard = {
     zjit: [],
     benchmarks: [],
   },
+  other_memory: {
+    no_jit: [],
+    yjit: [],
+    zjit: [],
+    benchmarks: [],
+  },
   micro: {
+    no_jit: [],
+    yjit: [],
+    zjit: [],
+    benchmarks: [],
+  },
+  micro_memory: {
     no_jit: [],
     yjit: [],
     zjit: [],
@@ -50,14 +78,29 @@ dashboard = {
 
 benchmarks.sort_by(&:first).each do |benchmark, metadata|
   results = benchmark_results.fetch(benchmark)
+  memory = memory_results.fetch(benchmark)
   category = metadata.fetch(:category, 'other').to_sym
+  memory_category = "#{category}_memory".to_sym
 
+  # Process speed data
   no_jit, yjit, zjit = results[ruby]
   if no_jit
     dashboard[category][:no_jit] << format_float(no_jit / no_jit)
     dashboard[category][:yjit] << (yjit ? format_float(no_jit / yjit) : 0.0)
     dashboard[category][:zjit] << (zjit ? format_float(no_jit / zjit) : 0.0)
     dashboard[category][:benchmarks] << benchmark.to_s
+  end
+
+  # Process memory data (if available)
+  if memory[ruby]
+    no_jit_mem, yjit_mem, zjit_mem = memory[ruby]
+    if no_jit_mem
+      # Memory is in bytes, convert to MB for dashboard
+      dashboard[memory_category][:no_jit] << format_float(no_jit_mem / 1024.0 / 1024.0)
+      dashboard[memory_category][:yjit] << (yjit_mem ? format_float(yjit_mem / 1024.0 / 1024.0) : 0.0)
+      dashboard[memory_category][:zjit] << (zjit_mem ? format_float(zjit_mem / 1024.0 / 1024.0) : 0.0)
+      dashboard[memory_category][:benchmarks] << benchmark.to_s
+    end
   end
 end
 
